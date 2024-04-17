@@ -13,7 +13,7 @@ export enum ParseWarningType {
   ParamNeverUsed,
 }
 
-enum ParseErrorType {
+export enum ParseErrorType {
   ParseError,
 }
 

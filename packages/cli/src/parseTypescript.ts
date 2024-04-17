@@ -1,4 +1,10 @@
-import { ParseEvent, parseTSQuery, TSQueryAST } from '@pgtyped/parser';
+import {
+  ParseEvent,
+  parseSQLFile,
+  parseTSQuery,
+  SQLQueryAST,
+  TSQueryAST,
+} from '@pgtyped/parser';
 import ts from 'typescript';
 import { TransformConfig } from './config.js';
 
@@ -7,7 +13,10 @@ interface INode {
   queryText: string;
 }
 
-export type TSParseResult = { queries: TSQueryAST[]; events: ParseEvent[] };
+export type TSParseResult = {
+  queries: (TSQueryAST | SQLQueryAST)[];
+  events: ParseEvent[];
+};
 
 export function parseFile(
   sourceFile: ts.SourceFile,
@@ -25,7 +34,9 @@ export function parseFile(
       const functionName = callNode.expression.getText();
       if (functionName === transformConfig.functionName) {
         const queryName = callNode.parent.getChildren()[0].getText();
-        const queryText = callNode.arguments[0].getText().slice(1, -1).trim();
+        // Intentionally not trimming the query text here (as otherwise query text *has*
+        // to start immediately after an opening-backtick, which is not always aesthetic)
+        const queryText = callNode.arguments[0].getText().slice(1, -1);
         foundNodes.push({
           queryName,
           queryText,
@@ -33,7 +44,10 @@ export function parseFile(
       }
     }
 
-    if (node.kind === ts.SyntaxKind.TaggedTemplateExpression) {
+    if (
+      transformConfig?.mode === 'ts' &&
+      node.kind === ts.SyntaxKind.TaggedTemplateExpression
+    ) {
       const queryName = node.parent.getChildren()[0].getText();
       const taggedTemplateNode = node as ts.TaggedTemplateExpression;
       const tagName = taggedTemplateNode.tag.getText();
@@ -53,15 +67,25 @@ export function parseFile(
     ts.forEachChild(node, parseNode);
   }
 
-  const queries: TSQueryAST[] = [];
+  const queries: (SQLQueryAST | TSQueryAST)[] = [];
   const events: ParseEvent[] = [];
   for (const node of foundNodes) {
-    const { query, events: qEvents } = parseTSQuery(
-      node.queryText,
-      node.queryName,
-    );
-    queries.push(query);
-    events.push(...qEvents);
+    if (transformConfig?.mode === 'ts-implicit') {
+      const {
+        queries: [query],
+        events: qEvents,
+      } = parseSQLFile(node.queryText, { maxQueries: 1 });
+
+      queries.push({ ...query, rawStatement: node.queryText });
+      events.push(...qEvents);
+    } else {
+      const { query, events: qEvents } = parseTSQuery(
+        node.queryText,
+        node.queryName,
+      );
+      queries.push(query);
+      events.push(...qEvents);
+    }
   }
 
   return { queries, events };

@@ -1,6 +1,13 @@
-import { SQLParserListener } from './parser/SQLParserListener.js';
 import { CharStreams, CommonTokenStream } from 'antlr4ts';
+import { Interval } from 'antlr4ts/misc/index.js';
 import { ParseTreeWalker } from 'antlr4ts/tree/ParseTreeWalker.js';
+import {
+  Logger,
+  ParseErrorType,
+  ParseEvent,
+  ParseEventType,
+  ParseWarningType,
+} from './logger.js';
 import { SQLLexer } from './parser/SQLLexer.js';
 import {
   IgnoredCommentContext,
@@ -11,13 +18,7 @@ import {
   SQLParser,
   StatementBodyContext,
 } from './parser/SQLParser.js';
-import {
-  Logger,
-  ParseEvent,
-  ParseEventType,
-  ParseWarningType,
-} from './logger.js';
-import { Interval } from 'antlr4ts/misc/index.js';
+import { SQLParserListener } from './parser/SQLParserListener.js';
 
 export enum TransformType {
   Scalar = 'scalar',
@@ -68,6 +69,7 @@ export interface QueryAST {
   name: string;
   params: Param[];
   statement: Statement;
+  rawStatement?: string;
   usedParamSet: { [paramName: string]: true };
 }
 
@@ -270,7 +272,10 @@ class ParseListener implements SQLParserListener {
 
 export type SQLParseResult = { queries: QueryAST[]; events: ParseEvent[] };
 
-function parseText(text: string): SQLParseResult {
+function parseText(
+  text: string,
+  opts: { maxQueries: number } = { maxQueries: Number.MAX_SAFE_INTEGER },
+): SQLParseResult {
   const logger = new Logger();
   const inputStream = CharStreams.fromString(text);
   const lexer = new SQLLexer(inputStream);
@@ -285,8 +290,20 @@ function parseText(text: string): SQLParseResult {
 
   const listener = new ParseListener(logger);
   ParseTreeWalker.DEFAULT.walk(listener as SQLParserListener, tree);
+
+  if (listener.parseTree.queries.length > opts.maxQueries) {
+    logger.logEvent({
+      type: ParseEventType.Error,
+      critical: true,
+      message: {
+        type: ParseErrorType.ParseError,
+        text: `Max query count exceeded. Expected ${opts.maxQueries}, saw ${listener.parseTree.queries.length}`,
+      },
+    });
+  }
+
   return {
-    queries: listener.parseTree.queries,
+    queries: listener.parseTree.queries.slice(0, opts.maxQueries),
     events: logger.parseEvents,
   };
 }

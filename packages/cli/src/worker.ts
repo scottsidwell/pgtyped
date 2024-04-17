@@ -54,7 +54,7 @@ export async function getTypeDecs({
   const contents = await connectAndGetFileContents(fileName);
   const types = new TypeAllocator(TypeMapping(config.typesOverrides));
 
-  if (transform.mode === 'sql') {
+  if (transform.mode === 'sql' || transform.mode === 'ts-implicit') {
     // Second parameter has no effect here, we could have used any value
     types.use(
       { name: 'PreparedQuery', from: '@pgtyped/runtime' },
@@ -86,7 +86,12 @@ export async function processFile({
   if ('emitTemplate' in transform && transform.emitTemplate) {
     decsFileName = nun.renderString(transform.emitTemplate, ppath);
   } else {
-    const suffix = transform.mode === 'ts' ? 'types.ts' : 'ts';
+    const suffix =
+      transform.mode === 'ts'
+        ? 'types.ts'
+        : transform.mode === 'ts-implicit'
+        ? 'sql.ts'
+        : 'ts';
     decsFileName = path.resolve(ppath.dir, `${ppath.name}.${suffix}`);
   }
 

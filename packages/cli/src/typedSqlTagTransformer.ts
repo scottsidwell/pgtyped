@@ -4,10 +4,9 @@ import { globSync } from 'glob';
 import path from 'path';
 import { ParsedConfig, TSTypedSQLTagTransformConfig } from './config.js';
 import {
-  generateDeclarations,
-  genTypedSQLOverloadFunctions,
-  TSTypedQuery,
+  SQLTypedQuery,
   TypeDeclarationSet,
+  generateDeclarations,
 } from './generator.js';
 import { TransformJob, WorkerPool } from './index.js';
 import { TypeAllocator } from './types.js';
@@ -41,9 +40,10 @@ export class TypedSqlTagTransformer {
       const job = {
         files: [fileName],
       };
-      !initialized
-        ? this.pushToQueue(job)
-        : await this.generateTypedSQLTagFileForJob(job, true);
+      this.pushToQueue(job);
+      if (initialized) {
+        return this.waitForTypedSQLQueueAndGenerate(true);
+      }
     };
 
     chokidar
@@ -71,9 +71,8 @@ export class TypedSqlTagTransformer {
 
     debug('found query files %o', fileList);
 
-    await this.generateTypedSQLTagFileForJob({
-      files: fileList,
-    });
+    this.pushToQueue({ files: fileList });
+    return this.waitForTypedSQLQueueAndGenerate(false);
   }
 
   private pushToQueue(job: TransformJob) {
@@ -94,14 +93,6 @@ export class TypedSqlTagTransformer {
       'getTypeDecs',
     )) as Awaited<getTypeDecsFnResult>;
     // Result should be serializable!
-  }
-
-  private async generateTypedSQLTagFileForJob(
-    job: TransformJob,
-    useCache?: boolean,
-  ) {
-    this.pushToQueue(job);
-    return this.waitForTypedSQLQueueAndGenerate(useCache);
   }
 
   private async waitForTypedSQLQueueAndGenerate(useCache?: boolean) {
@@ -127,38 +118,45 @@ export class TypedSqlTagTransformer {
     return this.generateTypedSQLTagFile(Object.values(this.cache));
   }
 
-  private contentStart = `import { ${this.transform.functionName} as sourceSql } from '@pgtyped/runtime';\n\n`;
-  private contentEnd = [
-    `export function ${this.transform.functionName}(s: string): unknown;`,
-    `export function ${this.transform.functionName}(s: string): unknown {`,
-    `  return sourceSql([s] as any);`,
-    `}`,
-  ];
-
   private async generateTypedSQLTagFile(typeDecsSets: TypeDeclarationSet[]) {
     console.log(`Generating ${this.fullFileName}...`);
-    let typeDefinitions = '';
-    let queryTypes = '';
-    let typedSQLOverloadFns = '';
+    let typeDefinitions = [];
+    let queryTypes = [];
+    let preparedStatements = [];
 
     for (const typeDecSet of typeDecsSets) {
-      typeDefinitions += TypeAllocator.typeDefinitionDeclarations(
-        this.transform.emitFileName,
-        typeDecSet.typeDefinitions,
+      typeDefinitions.push(
+        TypeAllocator.typeDefinitionDeclarations(
+          this.transform.emitFileName,
+          typeDecSet.typeDefinitions,
+        ),
       );
-      queryTypes += generateDeclarations(typeDecSet.typedQueries);
-      typedSQLOverloadFns += genTypedSQLOverloadFunctions(
-        this.transform.functionName,
-        typeDecSet.typedQueries as TSTypedQuery[],
-      );
+      queryTypes.push(generateDeclarations(typeDecSet.typedQueries));
+
+      for (const typeDec of typeDecSet.typedQueries as SQLTypedQuery[]) {
+        preparedStatements.push(
+          `[\`${typeDec.query.ast.rawStatement}\`]: ` +
+            `new PreparedQuery<${typeDec.query.paramTypeAlias},${typeDec.query.returnTypeAlias}>` +
+            `(${typeDec.query.name}IR),`,
+        );
+      }
     }
 
-    let content = this.contentStart;
-    content += typeDefinitions;
-    content += queryTypes;
-    content += typedSQLOverloadFns;
-    content += '\n\n';
-    content += this.contentEnd.join('\n');
+    queryTypes.push(
+      `export const preparedStatements = {\n` +
+        preparedStatements.join('\n') +
+        `\n} as const;\n\n`,
+    );
+    queryTypes.push(
+      `export const sql = <T extends keyof typeof preparedStatements>(sql: T) => {\n` +
+        `  return preparedStatements[sql];\n` +
+        `}`,
+    );
+
+    let content = '';
+    content += typeDefinitions.join('\n');
+    content += queryTypes.join('\n');
+    content += '\n';
     await fs.outputFile(this.fullFileName, content);
     console.log(`Saved ${this.fullFileName}`);
   }

@@ -234,6 +234,16 @@ test('select query with a bigint field', async () => {
 
 
 test('ts-implicit mode query', async () => {
-  const books = await sql(`SELECT * FROM books WHERE id = $id`).run({id: 1}, client);
+  const books = await sql(`
+    /* @name GetBooks */
+    SELECT * FROM books WHERE id = :id;
+  `).run({id: 1}, client);
+  expect(books).toMatchSnapshot();
+});
+test('ts-implicit mode query', async () => {
+  const books = await sql(`
+    /* @name SetBooks */
+    UPDATE books SET name = :name WHERE id = :id;
+  `).run({id: 1}, client);
   expect(books).toMatchSnapshot();
 });

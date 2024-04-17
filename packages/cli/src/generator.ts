@@ -6,8 +6,8 @@ import {
   SQLQueryIR,
   TSQueryAST,
 } from '@pgtyped/parser';
-
 import { getTypes, TypeSource } from '@pgtyped/query';
+import { IQueryTypes } from '@pgtyped/query/lib/actions.js';
 import {
   ParameterTransform,
   processSQLQueryIR,
@@ -19,7 +19,6 @@ import path from 'path';
 import { ParsedConfig, TransformConfig } from './config.js';
 import { parseCode as parseTypescriptFile } from './parseTypescript.js';
 import { TypeAllocator, TypeDefinitions, TypeScope } from './types.js';
-import { IQueryTypes } from '@pgtyped/query/lib/actions.js';
 
 export enum ProcessingMode {
   SQL = 'sql-file',
@@ -272,7 +271,7 @@ export type TSTypedQuery = {
   typeDeclaration: string;
 };
 
-type SQLTypedQuery = {
+export type SQLTypedQuery = {
   mode: 'sql';
   fileName: string;
   query: {
@@ -343,6 +342,33 @@ export async function generateTypedecsFromFile(
           )}Result`,
         },
         fileName,
+        typeDeclaration: result,
+      };
+    } else if (transform.mode === 'ts-implicit') {
+      const tsQueryAST = queryAST as SQLQueryAST;
+      const result = await queryToTypeDeclarations(
+        {
+          ast: tsQueryAST,
+          mode: ProcessingMode.SQL,
+        },
+        typeSource,
+        types,
+        config,
+      );
+      typedQuery = {
+        mode: 'sql' as const,
+        fileName,
+        query: {
+          name: camelCase(tsQueryAST.name),
+          ast: tsQueryAST,
+          ir: queryASTToIR(tsQueryAST),
+          paramTypeAlias: `${interfacePrefix}${pascalCase(
+            tsQueryAST.name,
+          )}Params`,
+          returnTypeAlias: `${interfacePrefix}${pascalCase(
+            tsQueryAST.name,
+          )}Result`,
+        },
         typeDeclaration: result,
       };
     } else {
@@ -420,17 +446,4 @@ export function generateDeclarationFile(typeDecSet: TypeDeclarationSet) {
   content += '\n';
   content += generateDeclarations(typeDecSet.typedQueries);
   return content;
-}
-
-export function genTypedSQLOverloadFunctions(
-  functionName: string,
-  typedQueries: TSTypedQuery[],
-) {
-  return typedQueries
-    .map(
-      (typeDec) =>
-        `export function ${functionName}(s: \`${typeDec.query.ast.text}\`): ReturnType<typeof sourceSql<${typeDec.query.queryTypeAlias}>>;`,
-    )
-    .filter((s) => s)
-    .join('\n');
 }
